@@ -29,7 +29,13 @@ export function useAuth() {
     );
 
     void (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session }, error } = await supabase.auth.getSession();
+
+      if (error) {
+        console.warn('Error restoring session:', error);
+        await supabase.auth.signOut();
+      }
+
       setAuthState({
         user: session?.user ?? null,
         session,
@@ -42,7 +48,7 @@ export function useAuth() {
 
   const signUp = async (email: string, password: string, userData?: { display_name?: string }) => {
     const redirectUrl = `${window.location.origin}/`;
-    
+
     const { error } = await supabase.auth.signUp({
       email,
       password,
