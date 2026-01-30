@@ -1,203 +1,3 @@
-export interface OpenFoodFactsProduct {
-  code: string;
-  product: {
-    product_name?: string;
-    product_name_en?: string;
-    image_url?: string;
-    image_front_url?: string;
-    brands?: string;
-    categories?: string;
-    ingredients_text?: string;
-    ingredients_text_en?: string;
-    nutriments?: {
-      energy_100g?: number;
-      fat_100g?: number;
-      saturated_fat_100g?: number;
-      carbohydrates_100g?: number;
-      sugars_100g?: number;
-      fiber_100g?: number;
-      proteins_100g?: number;
-      salt_100g?: number;
-      sodium_100g?: number;
-    };
-    nutriscore_grade?: string;
-    nova_group?: number;
-    ecoscore_grade?: string;
-    allergens?: string;
-    traces?: string;
-    additives_tags?: string[];
-    ingredients_analysis_tags?: string[];
-    labels?: string;
-    packaging?: string;
-    stores?: string;
-    countries?: string;
-  };
-  status: number;
-  status_verbose?: string;
-}
-
-export interface ProductData {
-  barcode: string;
-  name: string;
-  brand?: string;
-  image?: string;
-  categories?: string;
-  ingredients?: string;
-  nutriscore?: string;
-  nova_group?: number;
-  allergens?: string[];
-  additives?: string[];
-  nutritionFacts?: {
-    energy?: number;
-    fat?: number;
-    saturatedFat?: number;
-    carbs?: number;
-    sugars?: number;
-    fiber?: number;
-    protein?: number;
-    salt?: number;
-  };
-  healthWarnings?: string[];
-  isHealthy?: boolean;
-}
-
-class OpenFoodFactsService {
-  private readonly baseUrl = 'https://world.openfoodfacts.org/api/v2';
-
-  async getProductByBarcode(barcode: string): Promise<ProductData | null> {
-    try {
-      const response = await fetch(`${this.baseUrl}/product/${barcode}.json`);
-      const data: OpenFoodFactsProduct = await response.json();
-
-      if (data.status === 0 || !data.product) {
-        return null;
-      }
-
-      return this.transformProduct(data);
-    } catch (error) {
-      console.error('Error fetching product from Open Food Facts:', error);
-      throw new Error('Failed to fetch product data');
-    }
-  }
-
-  private transformProduct(data: OpenFoodFactsProduct): ProductData {
-    const product = data.product;
-    
-    // Extract product name (prefer English if available)
-    const name = product.product_name_en || product.product_name || 'Unknown Product';
-    
-    // Extract ingredients (prefer English if available)
-    const ingredients = product.ingredients_text_en || product.ingredients_text || '';
-    
-    // Extract allergens
-    const allergens = product.allergens ? 
-      product.allergens.split(',').map(a => a.trim().replace('en:', '')) : [];
-    
-    // Extract additives
-    const additives = product.additives_tags || [];
-    
-    // Calculate health warnings based on various factors
-    const healthWarnings = this.calculateHealthWarnings(product);
-    
-    // Determine if product is generally healthy
-    const isHealthy = this.assessHealthiness(product);
-
-    return {
-      barcode: data.code,
-      name,
-      brand: product.brands,
-      image: product.image_front_url || product.image_url,
-      categories: product.categories,
-      ingredients,
-      nutriscore: product.nutriscore_grade?.toUpperCase(),
-      nova_group: product.nova_group,
-      allergens,
-      additives: additives.map(tag => tag.replace('en:', '')),
-      nutritionFacts: {
-        energy: product.nutriments?.energy_100g,
-        fat: product.nutriments?.fat_100g,
-        saturatedFat: product.nutriments?.saturated_fat_100g,
-        carbs: product.nutriments?.carbohydrates_100g,
-        sugars: product.nutriments?.sugars_100g,
-        fiber: product.nutriments?.fiber_100g,
-        protein: product.nutriments?.proteins_100g,
-        salt: product.nutriments?.salt_100g || (product.nutriments?.sodium_100g ? product.nutriments.sodium_100g * 2.5 : undefined)
-      },
-      healthWarnings,
-      isHealthy
-    };
-  }
-
-  private calculateHealthWarnings(product: any): string[] {
-    const warnings: string[] = [];
-    
-    // High sugar warning
-    if (product.nutriments?.sugars_100g && product.nutriments.sugars_100g > 15) {
-      warnings.push('High in sugar');
-    }
-    
-    // High salt warning
-    const salt = product.nutriments?.salt_100g || (product.nutriments?.sodium_100g ? product.nutriments.sodium_100g * 2.5 : 0);
-    if (salt > 1.5) {
-      warnings.push('High in salt');
-    }
-    
-    // High saturated fat warning
-    if (product.nutriments?.saturated_fat_100g && product.nutriments.saturated_fat_100g > 5) {
-      warnings.push('High in saturated fat');
-    }
-    
-    // Ultra-processed food warning (NOVA 4)
-    if (product.nova_group === 4) {
-      warnings.push('Ultra-processed food');
-    }
-    
-    // Poor Nutri-Score
-    if (product.nutriscore_grade && ['d', 'e'].includes(product.nutriscore_grade.toLowerCase())) {
-      warnings.push('Poor nutritional quality');
-    }
-    
-    // Contains additives
-    if (product.additives_tags && product.additives_tags.length > 3) {
-      warnings.push('Contains multiple additives');
-    }
-
-    return warnings;
-  }
-
-  private assessHealthiness(product: any): boolean {
-    // Simple healthiness assessment based on multiple factors
-    let healthScore = 0;
-    
-    // Good nutri-score
-    if (product.nutriscore_grade && ['a', 'b'].includes(product.nutriscore_grade.toLowerCase())) {
-      healthScore += 2;
-    }
-    
-    // Low processing level
-    if (product.nova_group && product.nova_group <= 2) {
-      healthScore += 1;
-    }
-    
-    // Low sugar
-    if (!product.nutriments?.sugars_100g || product.nutriments.sugars_100g < 5) {
-      healthScore += 1;
-    }
-    
-    // Low salt
-    const salt = product.nutriments?.salt_100g || (product.nutriments?.sodium_100g ? product.nutriments.sodium_100g * 2.5 : 0);
-    if (salt < 0.3) {
-      healthScore += 1;
-    }
-    
-    // Has fiber
-    if (product.nutriments?.fiber_100g && product.nutriments.fiber_100g > 3) {
-      healthScore += 1;
-    }
-    
-    return healthScore >= 3;
-  }
-}
 import { productCacheStorage, scanHistoryStorage } from '@/utils/storage';
 
 export interface OpenFoodFactsProduct {
@@ -214,14 +14,14 @@ export interface OpenFoodFactsProduct {
     labels?: string;
     countries?: string;
     manufacturing_places?: string;
-    
+
     // Images
     image_url?: string;
     image_front_url?: string;
     image_ingredients_url?: string;
     image_nutrition_url?: string;
     image_packaging_url?: string;
-    
+
     // Ingredients & Allergens
     ingredients_text?: string;
     ingredients_text_en?: string;
@@ -231,7 +31,7 @@ export interface OpenFoodFactsProduct {
     ingredients_analysis_tags?: string[];
     ingredients_from_palm_oil_n?: number;
     ingredients_that_may_be_from_palm_oil_n?: number;
-    
+
     // Nutrition Facts
     nutriments?: {
       'energy-kcal_100g'?: number;
@@ -250,7 +50,7 @@ export interface OpenFoodFactsProduct {
       calcium_100g?: number;
       iron_100g?: number;
     };
-    
+
     // Health & Environmental Indicators
     nutriscore_grade?: string;
     nutriscore_score?: number;
@@ -258,7 +58,7 @@ export interface OpenFoodFactsProduct {
     ecoscore_grade?: string;
     ecoscore_score?: number;
     carbon_footprint_from_known_ingredients_product?: number;
-    
+
     // Metadata
     creator?: string;
     created_t?: number;
@@ -282,14 +82,14 @@ export interface ProductData {
   labels?: string;
   countries?: string;
   manufacturingPlaces?: string;
-  
+
   // Images
   image?: string;
   imageUrl?: string;
   imageIngredientsUrl?: string;
   imageNutritionUrl?: string;
   imagePackagingUrl?: string;
-  
+
   // Ingredients & Allergens
   ingredients?: string;
   allergens?: string[];
@@ -298,7 +98,7 @@ export interface ProductData {
   ingredientsAnalysisTags?: string[];
   palmOilIngredients?: number;
   mayBePalmOilIngredients?: number;
-  
+
   // Nutrition Facts
   nutritionFacts?: {
     energyKcal?: number;
@@ -316,7 +116,7 @@ export interface ProductData {
     calcium?: number;
     iron?: number;
   };
-  
+
   // Health & Environmental Indicators
   nutriscore?: string;
   nutriscoreScore?: number;
@@ -324,14 +124,14 @@ export interface ProductData {
   ecoscore?: string;
   ecoscoreScore?: number;
   carbonFootprint?: number;
-  
+
   // Metadata
   creator?: string;
   createdAt?: number;
   lastModified?: number;
   link?: string;
   stores?: string;
-  
+
   // Computed Health Data
   healthWarnings?: string[];
   isHealthy?: boolean;
@@ -388,10 +188,10 @@ class OpenFoodFactsService {
       }
 
       const productData = this.transformProduct(data);
-      
+
       // Cache the product data
       productCacheStorage.set(barcode, productData);
-      
+
       // Add to scan history
       scanHistoryStorage.add({
         barcode,
@@ -410,33 +210,33 @@ class OpenFoodFactsService {
 
   private transformProduct(data: OpenFoodFactsProduct): ProductData {
     const product = data.product;
-    
+
     // Extract product name (prefer English if available)
     const name = product.product_name_en || product.product_name || 'Unknown Product';
-    
+
     // Extract ingredients (prefer English if available)
     const ingredients = product.ingredients_text_en || product.ingredients_text || '';
-    
+
     // Extract allergens
-    const allergens = product.allergens ? 
+    const allergens = product.allergens ?
       product.allergens.split(',').map(a => a.trim().replace('en:', '')) : [];
-    
+
     // Extract traces
-    const traces = product.traces ? 
+    const traces = product.traces ?
       product.traces.split(',').map(t => t.trim().replace('en:', '')) : [];
-    
+
     // Extract additives
     const additives = product.additives_tags || [];
-    
+
     // Calculate health warnings based on various factors
     const healthWarnings = this.calculateHealthWarnings(product);
-    
+
     // Determine if product is generally healthy
     const isHealthy = this.assessHealthiness(product);
-    
+
     // Calculate health score (0-100)
     const healthScore = this.calculateHealthScore(product);
-    
+
     // Get grade from health score
     const grade = this.getGradeFromScore(healthScore);
 
@@ -452,14 +252,14 @@ class OpenFoodFactsService {
       labels: product.labels,
       countries: product.countries,
       manufacturingPlaces: product.manufacturing_places,
-      
+
       // Images
       image: product.image_front_url || product.image_url,
       imageUrl: product.image_front_url || product.image_url,
       imageIngredientsUrl: product.image_ingredients_url,
       imageNutritionUrl: product.image_nutrition_url,
       imagePackagingUrl: product.image_packaging_url,
-      
+
       // Ingredients & Allergens
       ingredients,
       allergens,
@@ -468,7 +268,7 @@ class OpenFoodFactsService {
       ingredientsAnalysisTags: product.ingredients_analysis_tags,
       palmOilIngredients: product.ingredients_from_palm_oil_n,
       mayBePalmOilIngredients: product.ingredients_that_may_be_from_palm_oil_n,
-      
+
       // Nutrition Facts
       nutritionFacts: {
         energyKcal: product.nutriments?.['energy-kcal_100g'],
@@ -486,7 +286,7 @@ class OpenFoodFactsService {
         calcium: product.nutriments?.calcium_100g,
         iron: product.nutriments?.iron_100g,
       },
-      
+
       // Health & Environmental Indicators
       nutriscore: product.nutriscore_grade?.toUpperCase(),
       nutriscoreScore: product.nutriscore_score,
@@ -494,14 +294,14 @@ class OpenFoodFactsService {
       ecoscore: product.ecoscore_grade?.toUpperCase(),
       ecoscoreScore: product.ecoscore_score,
       carbonFootprint: product.carbon_footprint_from_known_ingredients_product,
-      
+
       // Metadata
       creator: product.creator,
       createdAt: product.created_t,
       lastModified: product.last_modified_t,
       link: product.link,
       stores: product.stores,
-      
+
       // Computed Health Data
       healthWarnings,
       isHealthy,
@@ -512,33 +312,33 @@ class OpenFoodFactsService {
 
   private calculateHealthWarnings(product: any): string[] {
     const warnings: string[] = [];
-    
+
     // High sugar warning
     if (product.nutriments?.sugars_100g && product.nutriments.sugars_100g > 15) {
       warnings.push('High in sugar');
     }
-    
+
     // High salt warning
     const salt = product.nutriments?.salt_100g || (product.nutriments?.sodium_100g ? product.nutriments.sodium_100g * 2.5 : 0);
     if (salt > 1.5) {
       warnings.push('High in salt');
     }
-    
+
     // High saturated fat warning
     if (product.nutriments?.saturated_fat_100g && product.nutriments.saturated_fat_100g > 5) {
       warnings.push('High in saturated fat');
     }
-    
+
     // Ultra-processed food warning (NOVA 4)
     if (product.nova_group === 4) {
       warnings.push('Ultra-processed food');
     }
-    
+
     // Poor Nutri-Score
     if (product.nutriscore_grade && ['d', 'e'].includes(product.nutriscore_grade.toLowerCase())) {
       warnings.push('Poor nutritional quality');
     }
-    
+
     // Contains additives
     if (product.additives_tags && product.additives_tags.length > 3) {
       warnings.push('Contains multiple additives');
@@ -550,39 +350,39 @@ class OpenFoodFactsService {
   private assessHealthiness(product: any): boolean {
     // Simple healthiness assessment based on multiple factors
     let healthScore = 0;
-    
+
     // Good nutri-score
     if (product.nutriscore_grade && ['a', 'b'].includes(product.nutriscore_grade.toLowerCase())) {
       healthScore += 2;
     }
-    
+
     // Low processing level
     if (product.nova_group && product.nova_group <= 2) {
       healthScore += 1;
     }
-    
+
     // Low sugar
     if (!product.nutriments?.sugars_100g || product.nutriments.sugars_100g < 5) {
       healthScore += 1;
     }
-    
+
     // Low salt
     const salt = product.nutriments?.salt_100g || (product.nutriments?.sodium_100g ? product.nutriments.sodium_100g * 2.5 : 0);
     if (salt < 0.3) {
       healthScore += 1;
     }
-    
+
     // Has fiber
     if (product.nutriments?.fiber_100g && product.nutriments.fiber_100g > 3) {
       healthScore += 1;
     }
-    
+
     return healthScore >= 3;
   }
 
   private calculateHealthScore(product: any): number {
     let score = 50; // Base score
-    
+
     // Nutri-Score impact (±30 points)
     if (product.nutriscore_grade) {
       const nutriGrade = product.nutriscore_grade.toLowerCase();
@@ -594,7 +394,7 @@ class OpenFoodFactsService {
         case 'e': score -= 30; break;
       }
     }
-    
+
     // NOVA group impact (±20 points)
     if (product.nova_group) {
       switch (product.nova_group) {
@@ -604,11 +404,11 @@ class OpenFoodFactsService {
         case 4: score -= 20; break;
       }
     }
-    
+
     // Health warnings impact (-5 points each)
     const warnings = this.calculateHealthWarnings(product);
     score -= warnings.length * 5;
-    
+
     // Ensure score is between 0-100
     return Math.max(0, Math.min(100, score));
   }
@@ -622,5 +422,4 @@ class OpenFoodFactsService {
   }
 }
 
-export const openFoodFactsService = new OpenFoodFactsService();
 export const openFoodFactsService = new OpenFoodFactsService();

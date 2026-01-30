@@ -9,8 +9,8 @@
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview",
-    "backend:install": "cd backend && pip install -r requirements.txt",
-    "backend:start": "cd backend && python main.py",
+    "backend:install": "cd backend && venv\\Scripts\\pip install -r requirements.txt",
+    "backend:start": "cd backend && venv\\Scripts\\python main.py",
     "dev:all": "concurrently \"npm run dev\" \"npm run backend:start\" --names \"frontend,backend\" --prefix-colors \"cyan,magenta\""
   },
   "dependencies": {
