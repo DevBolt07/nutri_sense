@@ -8,3 +8,4 @@ pillow==11.0.0
 pytesseract==0.3.13
 opencv-python==4.6.0.66
 supabase==2.23.0
+python-dotenv==1.2.1

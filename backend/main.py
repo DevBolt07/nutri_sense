@@ -10,6 +10,10 @@ import base64
 import os
 from supabase import create_client, Client
 import pytesseract
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Initialize Supabase client
 supabase_url = os.getenv("SUPABASE_URL")
