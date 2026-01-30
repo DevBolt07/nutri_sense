@@ -12,9 +12,10 @@ interface ProductCardProps {
   category: string;
   score?: number;
   grade?: 'A' | 'B' | 'C' | 'D' | 'E';
-  price?: string;
-  trending?: boolean;
-  onAnalyze: (id: string) => void;
+        price?: string;
+        trending?: boolean;
+        amazonLink?: string;
+        onAnalyze: (id: string) => void;
   className?: string;
 }
 
@@ -28,6 +29,7 @@ export function ProductCard({
   grade,
   price,
   trending,
+  amazonLink,
   onAnalyze,
   className
 }: ProductCardProps) {
@@ -44,13 +46,22 @@ export function ProductCard({
   return (
     <Card className={cn("card-product group", className)}>
       {/* Product Image */}
-      <div className="relative aspect-[4/3] overflow-hidden">
-        <img 
-          src={image} 
-          alt={name}
-          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-        />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+      <div className="relative aspect-[4/3] overflow-hidden bg-muted/30 flex items-center justify-center">
+        {image ? (
+          <>
+            <img 
+              src={image} 
+              alt={name}
+              className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          </>
+        ) : (
+          <div className="text-center space-y-1">
+            <Scan className="h-8 w-8 text-muted-foreground mx-auto" />
+            <span className="text-xs text-muted-foreground">No Image</span>
+          </div>
+        )}
         
         {/* Badges */}
         <div className="absolute top-3 left-3 flex gap-2">
@@ -67,15 +78,6 @@ export function ProductCard({
           )}
         </div>
 
-        {/* Score */}
-        {score && (
-          <div className="absolute top-3 right-3">
-            <div className="bg-background/90 backdrop-blur-sm rounded-full px-2 py-1 flex items-center gap-1">
-              <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
-              <span className="text-xs font-medium">{score}</span>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Product Info */}
@@ -104,6 +106,17 @@ export function ProductCard({
           <Scan className="h-4 w-4 mr-2" />
           Analyze Nutrition
         </Button>
+
+        {/* Amazon Link */}
+        {amazonLink && (
+          <Button 
+            onClick={() => window.open(amazonLink, '_blank')}
+            variant="outline"
+            className="w-full rounded-xl h-10 font-medium transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
+          >
+            🛒 Buy on Amazon
+          </Button>
+        )}
       </div>
     </Card>
   );

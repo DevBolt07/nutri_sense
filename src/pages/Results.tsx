@@ -1,86 +1,78 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { MobileHeader } from "@/components/layout/mobile-header";
 import { HealthScoreCard } from "@/components/ui/health-score-card";
+import { supabase } from "@/integrations/supabase/client";
+import { profileService } from "@/services/profileService";
+import { NutriScoreDetailed } from "@/components/ui/nutri-score-detailed";
+import { CarbonFootprintCard } from "@/components/ui/carbon-footprint-card";
 import { IngredientAlertCard, IngredientAlert } from "@/components/ui/ingredient-alert";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { IngredientModal } from "@/components/ui/ingredient-modal";
+import { HealthChatbot } from "@/components/health-chatbot";
+import { OCRConfidenceBanner } from "@/components/ui/ocr-confidence-banner";
+import { AnimatedScoreBadge } from "@/components/ui/animated-score-badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Share, Bookmark, ExternalLink, AlertTriangle, CheckCircle, XCircle } from "lucide-react";
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from "@/components/ui/drawer";
+import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Share, Bookmark, ExternalLink, AlertTriangle, CheckCircle, XCircle, Camera, FileText, Eye, MessageCircle, Sparkles, Package, MapPin, Factory, Info, Leaf, Calendar, Globe } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ProductData } from "@/services/openFoodFacts";
+import { OCRResult } from "@/services/ocrService";
+import { IngredientAnalysis, ingredientAnalysisService } from "@/services/ingredientAnalysisService";
+import { User } from "@supabase/supabase-js";
 
 interface ResultsProps {
-  onNavigate: (page: string) => void;
+  onNavigate: (page: string, data?: any) => void;
+  user: User;
   data?: {
     productData?: ProductData;
+    ocrResult?: OCRResult;
     scanned?: boolean;
+    amazonLink?: string;
+    featured?: boolean;
+    scanMethod?: 'barcode' | 'ocr';
   };
 }
 
-const mockIngredients = [
-  "Water", "Sugar", "High Fructose Corn Syrup", "Citric Acid", "Natural Flavors", 
-  "Sodium Benzoate", "Caffeine", "Artificial Colors (Red 40, Blue 1)", "Sucralose"
-];
+// No mock data - all data comes from real scans and API
 
-const mockAlerts: IngredientAlert[] = [
-  {
-    id: "1",
-    ingredient: "High Fructose Corn Syrup",
-    alias: "HFCS",
-    reason: "High sugar content may spike blood glucose levels rapidly. Consider limiting intake if you have diabetes.",
-    severity: "high",
-    userProfile: ["Diabetes"]
-  },
-  {
-    id: "2", 
-    ingredient: "Artificial Colors (Red 40, Blue 1)",
-    reason: "Artificial food dyes may cause hyperactivity in children and allergic reactions in sensitive individuals.",
-    severity: "medium",
-    userProfile: ["Child Mode"]
-  },
-  {
-    id: "3",
-    ingredient: "Sodium Benzoate",
-    alias: "E211",
-    reason: "Preservative that may form benzene when combined with vitamin C. Generally safe but worth monitoring.",
-    severity: "low"
-  }
-];
+export function Results({ onNavigate, user, data }: ResultsProps) {
+  const [selectedIngredient, setSelectedIngredient] = useState<string | null>(null);
+  const [ingredientAnalysis, setIngredientAnalysis] = useState<IngredientAnalysis | null>(null);
+  const [isAnalyzingIngredient, setIsAnalyzingIngredient] = useState(false);
+  const [ingredientModalOpen, setIngredientModalOpen] = useState(false);
+  const [claims, setClaims] = useState<Array<{claim: string; status: 'verified' | 'misleading' | 'false'; reason: string}>>([]);
+  const [claimsLoading, setClaimsLoading] = useState(false);
+  const [alternatives, setAlternatives] = useState<Array<{name: string; brand: string; reason: string; benefits: string[]; healthierBecause: string}>>([]);
+  const [alternativesLoading, setAlternativesLoading] = useState(false);
+  const [fullUserProfile, setFullUserProfile] = useState<any>(null);
 
-const mockContradictions = [
-  {
-    claim: "Sugar-Free",
-    reality: "Contains High Fructose Corn Syrup and Sucralose",
-    severity: "high" as const
-  },
-  {
-    claim: "Natural Flavors",
-    reality: "Contains artificial preservatives and colors",
-    severity: "medium" as const
-  }
-];
+  // Fetch full user profile for chatbot
+  useEffect(() => {
+    const fetchUserProfile = async () => {
+      if (!user?.id) return;
+      try {
+        const profile = await profileService.getProfile(user.id);
+        if (profile) {
+          setFullUserProfile({
+            ...profile,
+            email: user.email,
+            user_id: user.id
+          });
+        }
+      } catch (error) {
+        console.error('Error fetching user profile:', error);
+      }
+    };
+    fetchUserProfile();
+  }, [user?.id, user?.email]);
 
-const mockAlternatives = [
-  {
-    name: "Organic Fruit Juice",
-    score: 85,
-    grade: "A" as const,
-    price: "$3.99",
-    store: "Whole Foods"
-  },
-  {
-    name: "Sparkling Water with Real Fruit",
-    score: 92,
-    grade: "A" as const,
-    price: "$2.49",
-    store: "Target"
-  }
-];
-
-export function Results({ onNavigate, data }: ResultsProps) {
   const productData = data?.productData;
+  const ocrResult = data?.ocrResult;
+  const isOCRResult = data?.scanMethod === 'ocr' && ocrResult;
   
   // Generate alerts from product data
   const generateAlertsFromProduct = (product: ProductData): IngredientAlert[] => {
@@ -108,12 +100,93 @@ export function Results({ onNavigate, data }: ResultsProps) {
     return alerts;
   };
 
-  const [alerts, setAlerts] = useState<IngredientAlert[]>(
-    productData ? generateAlertsFromProduct(productData) : []
-  );
+  // Generate alerts from OCR results
+  const generateAlertsFromOCR = (ocrResult: OCRResult): IngredientAlert[] => {
+    const alerts: IngredientAlert[] = [];
+    
+    ocrResult.healthAnalysis.warnings.forEach((warning, index) => {
+      let severity: 'low' | 'medium' | 'high' = 'medium';
+      
+      if (warning.toLowerCase().includes('high')) severity = 'high';
+      if (warning.toLowerCase().includes('excess')) severity = 'high';
+      
+      alerts.push({
+        id: `ocr-warning-${index}`,
+        ingredient: warning,
+        reason: warning,
+        severity,
+        userProfile: []
+      });
+    });
+    
+    return alerts;
+  };
+
+  const [alerts, setAlerts] = useState<IngredientAlert[]>(() => {
+    if (isOCRResult && ocrResult) {
+      return generateAlertsFromOCR(ocrResult);
+    } else if (productData) {
+      return generateAlertsFromProduct(productData);
+    }
+    return [];
+  });
   const [loading, setLoading] = useState(false);
 
-  // Calculate health score based on Nutri-Score and other factors
+  // Fetch claims verification on mount
+  useEffect(() => {
+    const fetchClaims = async () => {
+      if (!productData || isOCRResult) return;
+      
+      setClaimsLoading(true);
+      try {
+        // Fetch user profile
+        const userProfile = await profileService.getProfile(user.id);
+        
+        const { data, error } = await supabase.functions.invoke('verify-claims', {
+          body: { productData, userProfile }
+        });
+        
+        if (error) throw error;
+        if (data?.claims) {
+          setClaims(data.claims);
+        }
+      } catch (error) {
+        console.error('Failed to fetch claims:', error);
+      } finally {
+        setClaimsLoading(false);
+      }
+    };
+    
+    fetchClaims();
+  }, [productData, user.id, isOCRResult]);
+
+  // Fetch healthier alternatives on mount
+  useEffect(() => {
+    const fetchAlternatives = async () => {
+      if (!productData || isOCRResult) return;
+      
+      setAlternativesLoading(true);
+      try {
+        const userProfile = await profileService.getProfile(user.id);
+        
+        const { data, error } = await supabase.functions.invoke('suggest-alternatives', {
+          body: { productData, userProfile }
+        });
+        
+        if (error) throw error;
+        if (data?.alternatives) {
+          setAlternatives(data.alternatives);
+        }
+      } catch (error) {
+        console.error('Failed to fetch alternatives:', error);
+      } finally {
+        setAlternativesLoading(false);
+      }
+    };
+    
+    fetchAlternatives();
+  }, [productData, user.id, isOCRResult]);
+
   const calculateHealthScore = (product: ProductData): number => {
     let score = 50; // Base score
     
@@ -135,7 +208,14 @@ export function Results({ onNavigate, data }: ResultsProps) {
     return Math.max(0, Math.min(100, score));
   };
 
-  const healthScore = productData ? calculateHealthScore(productData) : 34;
+  const healthScore = (() => {
+    if (isOCRResult && ocrResult) {
+      return ocrResult.healthAnalysis.healthScore;
+    } else if (productData) {
+      return calculateHealthScore(productData);
+    }
+    return 34; // Default score
+  })();
   
   // Get grade from score
   const getGradeFromScore = (score: number): "A" | "B" | "C" | "D" | "E" => {
@@ -146,10 +226,48 @@ export function Results({ onNavigate, data }: ResultsProps) {
     return 'E';
   };
 
-  const healthGrade = getGradeFromScore(healthScore);
+  const healthGrade = (() => {
+    if (isOCRResult && ocrResult) {
+      return ocrResult.healthAnalysis.grade;
+    }
+    return getGradeFromScore(healthScore);
+  })();
 
   const handleDismissAlert = (id: string) => {
     setAlerts(prev => prev.filter(alert => alert.id !== id));
+  };
+
+  const handleIngredientClick = async (ingredientName: string) => {
+    setSelectedIngredient(ingredientName);
+    setIngredientModalOpen(true);
+    setIsAnalyzingIngredient(true);
+    setIngredientAnalysis(null);
+
+    try {
+      // Get user profile for personalized analysis (you can extend this)
+      const userProfile = {
+        healthConditions: [],
+        allergies: [],
+        dietaryRestrictions: []
+      };
+
+      const analysis = await ingredientAnalysisService.analyzeIngredient(
+        ingredientName,
+        userProfile
+      );
+      
+      setIngredientAnalysis(analysis);
+    } catch (error) {
+      console.error('Failed to analyze ingredient:', error);
+    } finally {
+      setIsAnalyzingIngredient(false);
+    }
+  };
+
+  const handleCloseIngredientModal = () => {
+    setIngredientModalOpen(false);
+    setSelectedIngredient(null);
+    setIngredientAnalysis(null);
   };
 
   // Parse ingredients into array
@@ -193,34 +311,51 @@ export function Results({ onNavigate, data }: ResultsProps) {
       <div className="px-4 py-6 max-w-md mx-auto space-y-6">
         {/* Product Info */}
         <Card className="card-material overflow-hidden animate-fade-in">
-          <div className="aspect-[4/3] bg-gradient-to-br from-muted/30 to-muted/10 flex items-center justify-center relative overflow-hidden">
-            {productData?.image ? (
-              <img src={productData.image} alt="Product" className="w-full h-full object-cover" />
-            ) : (
-              <img 
-                src="https://images.unsplash.com/photo-1570197788417-0e82375c9371?w=400&h=300&fit=crop" 
-                alt="Product Sample" 
-                className="w-full h-full object-cover"
-              />
-            )}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent" />
-          </div>
+          {!isOCRResult && (
+            <div className="aspect-[4/3] bg-gradient-to-br from-muted/30 to-muted/10 flex items-center justify-center relative overflow-hidden">
+              {productData?.image && productData.image !== "/placeholder.svg" ? (
+                <img src={productData.image} alt="Product" className="w-full h-full object-cover" />
+              ) : (
+                <div className="text-center space-y-2">
+                  <Camera className="h-16 w-16 text-muted-foreground mx-auto" />
+                  <p className="text-sm text-muted-foreground">Image Not Found</p>
+                </div>
+              )}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent" />
+            </div>
+          )}
           <div className="p-5">
-            <h2 className="text-headline-medium text-foreground font-semibold mb-2">
-              {productData?.name || "Unknown Product"}
-            </h2>
-            {productData?.brand && (
-              <p className="text-body-medium text-muted-foreground mb-3">
-                by {productData.brand}
-              </p>
+            {isOCRResult ? (
+              <>
+                <div className="flex items-center gap-2 mb-3">
+                  <FileText className="h-6 w-6 text-primary" />
+                  <h2 className="text-headline-medium text-foreground font-semibold">
+                    OCR Nutrition Analysis
+                  </h2>
+                </div>
+                <p className="text-body-medium text-muted-foreground mb-3">
+                  Extracted from nutrition label • Confidence: {Math.round(ocrResult.confidence)}%
+                </p>
+              </>
+            ) : (
+              <>
+                <h2 className="text-headline-medium text-foreground font-semibold mb-2">
+                  {productData?.name || "Unknown Product"}
+                </h2>
+                {productData?.brand && (
+                  <p className="text-body-medium text-muted-foreground mb-3">
+                    by {productData.brand}
+                  </p>
+                )}
+              </>
             )}
             <div className="flex gap-2 flex-wrap">
-              {productData?.categories && (
+              {!isOCRResult && productData?.categories && (
                 <Badge variant="outline" className="rounded-full">
                   {productData.categories.split(',')[0]}
                 </Badge>
               )}
-              {productData?.nutriscore && (
+              {!isOCRResult && productData?.nutriscore && (
                 <Badge 
                   variant={productData.nutriscore === 'A' || productData.nutriscore === 'B' ? 'default' : 'destructive'} 
                   className="rounded-full"
@@ -228,9 +363,15 @@ export function Results({ onNavigate, data }: ResultsProps) {
                   Nutri-Score {productData.nutriscore}
                 </Badge>
               )}
-              {productData?.nova_group === 4 && (
+              {!isOCRResult && productData?.nova_group === 4 && (
                 <Badge variant="outline" className="rounded-full text-warning border-warning/50">
                   Ultra-Processed
+                </Badge>
+              )}
+              {isOCRResult && (
+                <Badge variant="secondary" className="rounded-full">
+                  <FileText className="h-3 w-3 mr-1" />
+                  OCR Scan
                 </Badge>
               )}
               {data?.scanned && (
@@ -240,76 +381,440 @@ export function Results({ onNavigate, data }: ResultsProps) {
           </div>
         </Card>
 
-        {/* Health Scores */}
-        <div className="grid gap-4 animate-slide-up animate-stagger-1">
-          <HealthScoreCard
-            score={healthScore}
-            grade={healthGrade}
-            title="Health Score"
-            description="Based on nutritional quality and processing level"
-            className="animate-scale-in"
+        {/* OCR Confidence Banner with Raw Text Toggle */}
+        {isOCRResult && ocrResult && (
+          <OCRConfidenceBanner
+            confidence={ocrResult.confidence}
+            rawText={ocrResult.rawText || ocrResult.text}
+            ingredientsDetected={ocrResult.ingredients && ocrResult.ingredients.length > 0}
+            className="animate-fade-in"
           />
+        )}
+
+        {/* Nutri-Score Analysis */}
+        {!isOCRResult && productData?.nutriscore && (
+          <NutriScoreDetailed 
+            productData={productData}
+            className="animate-slide-up animate-stagger-1"
+          />
+        )}
+
+        {/* Animated Health Score for OCR Results */}
+        {isOCRResult && (
+          <Card className="card-material p-6 animate-scale-in animate-stagger-1">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-title-large text-foreground font-semibold mb-1">Health Analysis</h3>
+                <p className="text-sm text-muted-foreground">Based on extracted nutrition data</p>
+              </div>
+              <AnimatedScoreBadge 
+                score={healthScore} 
+                size="md"
+                showAnimation={true}
+              />
+            </div>
+          </Card>
+        )}
+        {/* Carbon Footprint */}
+        {!isOCRResult && productData && (
+          <CarbonFootprintCard 
+            productData={productData}
+            className="animate-slide-up animate-stagger-2"
+          />
+        )}
           
-          {productData?.nutritionFacts && (
+        {(productData?.nutritionFacts || (isOCRResult && ocrResult?.nutritionData)) && (
             <Card className="card-material p-5 animate-scale-in animate-stagger-2">
-              <h3 className="text-title-large text-foreground font-semibold mb-4">Nutrition Facts (per 100g)</h3>
+              <div className="flex items-center gap-2 mb-4">
+                <Package className="h-5 w-5 text-primary" />
+                <h3 className="text-title-large text-foreground font-semibold">
+                  {isOCRResult ? "Extracted Nutrition Facts" : "Nutrition Facts (per 100g)"}
+                </h3>
+              </div>
               <div className="grid grid-cols-2 gap-3 text-sm">
-                {productData.nutritionFacts.energy && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Energy</span>
-                    <span className="font-medium">{Math.round(productData.nutritionFacts.energy)} kJ</span>
-                  </div>
-                )}
-                {productData.nutritionFacts.fat !== undefined && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Fat</span>
-                    <span className="font-medium">{productData.nutritionFacts.fat.toFixed(1)}g</span>
-                  </div>
-                )}
-                {productData.nutritionFacts.saturatedFat !== undefined && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Saturated Fat</span>
-                    <span className="font-medium">{productData.nutritionFacts.saturatedFat.toFixed(1)}g</span>
-                  </div>
-                )}
-                {productData.nutritionFacts.carbs !== undefined && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Carbs</span>
-                    <span className="font-medium">{productData.nutritionFacts.carbs.toFixed(1)}g</span>
-                  </div>
-                )}
-                {productData.nutritionFacts.sugars !== undefined && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Sugars</span>
-                    <span className="font-medium">{productData.nutritionFacts.sugars.toFixed(1)}g</span>
-                  </div>
-                )}
-                {productData.nutritionFacts.protein !== undefined && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Protein</span>
-                    <span className="font-medium">{productData.nutritionFacts.protein.toFixed(1)}g</span>
-                  </div>
-                )}
-                {productData.nutritionFacts.salt !== undefined && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Salt</span>
-                    <span className="font-medium">{productData.nutritionFacts.salt.toFixed(2)}g</span>
-                  </div>
-                )}
-                {productData.nutritionFacts.fiber !== undefined && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Fiber</span>
-                    <span className="font-medium">{productData.nutritionFacts.fiber.toFixed(1)}g</span>
-                  </div>
+                {isOCRResult && ocrResult?.nutritionData ? (
+                  // OCR nutrition data
+                  <>
+                    {ocrResult.nutritionData.calories && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Calories</span>
+                        <span className="font-medium">{ocrResult.nutritionData.calories}</span>
+                      </div>
+                    )}
+                    {ocrResult.nutritionData.fat !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Fat</span>
+                        <span className="font-medium">{ocrResult.nutritionData.fat}g</span>
+                      </div>
+                    )}
+                    {ocrResult.nutritionData.carbohydrates !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Carbs</span>
+                        <span className="font-medium">{ocrResult.nutritionData.carbohydrates}g</span>
+                      </div>
+                    )}
+                    {ocrResult.nutritionData.sugar !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Sugar</span>
+                        <span className="font-medium">{ocrResult.nutritionData.sugar}g</span>
+                      </div>
+                    )}
+                    {ocrResult.nutritionData.protein !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Protein</span>
+                        <span className="font-medium">{ocrResult.nutritionData.protein}g</span>
+                      </div>
+                    )}
+                    {ocrResult.nutritionData.sodium !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Sodium</span>
+                        <span className="font-medium">{ocrResult.nutritionData.sodium}mg</span>
+                      </div>
+                    )}
+                    {ocrResult.nutritionData.fiber !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Fiber</span>
+                        <span className="font-medium">{ocrResult.nutritionData.fiber}g</span>
+                      </div>
+                    )}
+                    {ocrResult.nutritionData.servingSize && (
+                      <div className="col-span-2 pt-2 border-t border-border">
+                        <div className="flex justify-between p-2 bg-primary/5 rounded">
+                          <span className="text-muted-foreground">Serving Size</span>
+                          <span className="font-medium">{ocrResult.nutritionData.servingSize}</span>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  // Original product nutrition data - Enhanced with all fields
+                  <>
+                    {productData?.nutritionFacts?.energyKcal && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Energy</span>
+                        <span className="font-medium">{Math.round(productData.nutritionFacts.energyKcal)} kcal</span>
+                      </div>
+                    )}
+                    {productData?.nutritionFacts?.fat !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Fat</span>
+                        <span className="font-medium">{productData.nutritionFacts.fat.toFixed(1)}g</span>
+                      </div>
+                    )}
+                    {productData?.nutritionFacts?.saturatedFat !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Saturated Fat</span>
+                        <span className="font-medium">{productData.nutritionFacts.saturatedFat.toFixed(1)}g</span>
+                      </div>
+                    )}
+                    {productData?.nutritionFacts?.carbs !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Carbs</span>
+                        <span className="font-medium">{productData.nutritionFacts.carbs.toFixed(1)}g</span>
+                      </div>
+                    )}
+                    {productData?.nutritionFacts?.sugars !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Sugars</span>
+                        <span className="font-medium">{productData.nutritionFacts.sugars.toFixed(1)}g</span>
+                      </div>
+                    )}
+                    {productData?.nutritionFacts?.protein !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Protein</span>
+                        <span className="font-medium">{productData.nutritionFacts.protein.toFixed(1)}g</span>
+                      </div>
+                    )}
+                    {productData?.nutritionFacts?.salt !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Salt</span>
+                        <span className="font-medium">{productData.nutritionFacts.salt.toFixed(2)}g</span>
+                      </div>
+                    )}
+                    {productData?.nutritionFacts?.fiber !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Fiber</span>
+                        <span className="font-medium">{productData.nutritionFacts.fiber.toFixed(1)}g</span>
+                      </div>
+                    )}
+                    {productData?.nutritionFacts?.cholesterol !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Cholesterol</span>
+                        <span className="font-medium">{productData.nutritionFacts.cholesterol.toFixed(1)}g</span>
+                      </div>
+                    )}
+                    {productData?.nutritionFacts?.vitaminA !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Vitamin A</span>
+                        <span className="font-medium">{productData.nutritionFacts.vitaminA.toFixed(1)}g</span>
+                      </div>
+                    )}
+                    {productData?.nutritionFacts?.vitaminC !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Vitamin C</span>
+                        <span className="font-medium">{productData.nutritionFacts.vitaminC.toFixed(1)}g</span>
+                      </div>
+                    )}
+                    {productData?.nutritionFacts?.calcium !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Calcium</span>
+                        <span className="font-medium">{productData.nutritionFacts.calcium.toFixed(1)}g</span>
+                      </div>
+                    )}
+                    {productData?.nutritionFacts?.iron !== undefined && (
+                      <div className="flex justify-between p-2 bg-muted/20 rounded">
+                        <span className="text-muted-foreground">Iron</span>
+                        <span className="font-medium">{productData.nutritionFacts.iron.toFixed(1)}g</span>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </Card>
           )}
-        </div>
+
+          {/* Product Details - Only for barcode scans */}
+        {!isOCRResult && productData && (
+          <>
+            {/* Basic Product Information */}
+            {(productData.genericName || productData.quantity || productData.packaging || productData.countries || productData.manufacturingPlaces) && (
+              <Card className="card-material p-5 animate-fade-in">
+                <div className="flex items-center gap-2 mb-4">
+                  <Info className="h-5 w-5 text-primary" />
+                  <h3 className="text-title-large text-foreground font-semibold">Product Details</h3>
+                </div>
+                <div className="space-y-3 text-sm">
+                  {productData.genericName && (
+                    <div className="flex items-start gap-3">
+                      <Package className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-muted-foreground text-xs">Generic Name</p>
+                        <p className="font-medium">{productData.genericName}</p>
+                      </div>
+                    </div>
+                  )}
+                  {productData.quantity && (
+                    <div className="flex items-start gap-3">
+                      <Package className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-muted-foreground text-xs">Quantity</p>
+                        <p className="font-medium">{productData.quantity}</p>
+                      </div>
+                    </div>
+                  )}
+                  {productData.packaging && (
+                    <div className="flex items-start gap-3">
+                      <Package className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-muted-foreground text-xs">Packaging</p>
+                        <p className="font-medium">{productData.packaging}</p>
+                      </div>
+                    </div>
+                  )}
+                  {productData.countries && (
+                    <div className="flex items-start gap-3">
+                      <Globe className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-muted-foreground text-xs">Countries</p>
+                        <p className="font-medium">{productData.countries}</p>
+                      </div>
+                    </div>
+                  )}
+                  {productData.manufacturingPlaces && (
+                    <div className="flex items-start gap-3">
+                      <Factory className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-muted-foreground text-xs">Manufacturing Places</p>
+                        <p className="font-medium">{productData.manufacturingPlaces}</p>
+                      </div>
+                    </div>
+                  )}
+                  {productData.labels && (
+                    <div className="flex items-start gap-3">
+                      <CheckCircle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-muted-foreground text-xs">Labels</p>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {productData.labels.split(',').slice(0, 3).map((label, i) => (
+                            <Badge key={i} variant="secondary" className="text-xs">
+                              {label.trim()}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            )}
+
+            {/* Health & Environmental Indicators */}
+            {(productData.ecoscore || productData.carbonFootprint || productData.ingredientsAnalysisTags) && (
+              <Card className="card-material p-5 animate-fade-in">
+                <div className="flex items-center gap-2 mb-4">
+                  <Leaf className="h-5 w-5 text-green-600" />
+                  <h3 className="text-title-large text-foreground font-semibold">Environmental Impact</h3>
+                </div>
+                <div className="space-y-4">
+                  {productData.ecoscore && (
+                    <div className="flex items-center justify-between p-3 bg-green-50 dark:bg-green-950/20 rounded-lg">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">Eco-Score</p>
+                        <p className="text-xs text-muted-foreground">Environmental rating</p>
+                      </div>
+                      <Badge 
+                        className={cn(
+                          "text-lg font-bold px-4 py-1",
+                          productData.ecoscore === 'A' && "bg-green-600",
+                          productData.ecoscore === 'B' && "bg-lime-600",
+                          productData.ecoscore === 'C' && "bg-yellow-600",
+                          productData.ecoscore === 'D' && "bg-orange-600",
+                          productData.ecoscore === 'E' && "bg-red-600"
+                        )}
+                      >
+                        {productData.ecoscore}
+                      </Badge>
+                    </div>
+                  )}
+                  {productData.carbonFootprint !== undefined && (
+                    <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">Carbon Footprint</p>
+                        <p className="text-xs text-muted-foreground">CO₂ per kg</p>
+                      </div>
+                      <span className="text-lg font-bold">{productData.carbonFootprint.toFixed(2)} kg</span>
+                    </div>
+                  )}
+                  {productData.ingredientsAnalysisTags && productData.ingredientsAnalysisTags.length > 0 && (
+                    <div>
+                      <p className="text-sm font-medium text-foreground mb-2">Product Tags</p>
+                      <div className="flex flex-wrap gap-2">
+                        {productData.ingredientsAnalysisTags.map((tag, i) => (
+                          <Badge key={i} variant="outline" className="text-xs">
+                            {tag.replace('en:', '').replace(/-/g, ' ')}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {(productData.palmOilIngredients !== undefined || productData.mayBePalmOilIngredients !== undefined) && (
+                    <div className="pt-3 border-t border-border">
+                      <p className="text-xs text-muted-foreground">
+                        {productData.palmOilIngredients ? `${productData.palmOilIngredients} palm oil ingredient(s)` : 'No palm oil ingredients'}{' '}
+                        {productData.mayBePalmOilIngredients ? `• ${productData.mayBePalmOilIngredients} may contain palm oil` : ''}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            )}
+
+            {/* Product Images */}
+            {(productData.imageIngredientsUrl || productData.imageNutritionUrl || productData.imagePackagingUrl) && (
+              <Card className="card-material p-5 animate-fade-in">
+                <div className="flex items-center gap-2 mb-4">
+                  <Camera className="h-5 w-5 text-primary" />
+                  <h3 className="text-title-large text-foreground font-semibold">Product Images</h3>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {productData.imageIngredientsUrl && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">Ingredients</p>
+                      <img 
+                        src={productData.imageIngredientsUrl} 
+                        alt="Ingredients" 
+                        className="w-full aspect-square object-cover rounded-lg border border-border"
+                      />
+                    </div>
+                  )}
+                  {productData.imageNutritionUrl && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">Nutrition</p>
+                      <img 
+                        src={productData.imageNutritionUrl} 
+                        alt="Nutrition" 
+                        className="w-full aspect-square object-cover rounded-lg border border-border"
+                      />
+                    </div>
+                  )}
+                  {productData.imagePackagingUrl && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">Packaging</p>
+                      <img 
+                        src={productData.imagePackagingUrl} 
+                        alt="Packaging" 
+                        className="w-full aspect-square object-cover rounded-lg border border-border"
+                      />
+                    </div>
+                  )}
+                </div>
+              </Card>
+            )}
+
+            {/* Metadata & Link */}
+            {(productData.link || productData.lastModified || productData.stores) && (
+              <Card className="card-material p-5 animate-fade-in">
+                <div className="space-y-3 text-sm">
+                  {productData.link && (
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start gap-2"
+                      onClick={() => window.open(productData.link, '_blank')}
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      View on Open Food Facts
+                    </Button>
+                  )}
+                  {productData.lastModified && (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Calendar className="h-3 w-3" />
+                      <span>Last updated: {new Date(productData.lastModified * 1000).toLocaleDateString()}</span>
+                    </div>
+                  )}
+                  {productData.stores && (
+                    <div className="flex items-start gap-2 text-xs">
+                      <MapPin className="h-3 w-3 text-muted-foreground mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-muted-foreground">Available at</p>
+                        <p className="font-medium">{productData.stores}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            )}
+          </>
+        )}
+
+        {/* Amazon Purchase Button */}
+        {data?.amazonLink && (
+          <Card className="card-material animate-scale-in animate-stagger-3">
+            <div className="p-6 space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="p-3 rounded-full bg-warning/10">
+                  <ExternalLink className="h-6 w-6 text-warning" />
+                </div>
+                <div>
+                  <h3 className="text-title-large font-semibold text-foreground">Available for Purchase</h3>
+                  <p className="text-sm text-muted-foreground">Buy this healthy product online</p>
+                </div>
+              </div>
+              <Button 
+                onClick={() => window.open(data.amazonLink, '_blank')}
+                className="w-full bg-gradient-warning hover:opacity-90 text-warning-foreground rounded-xl h-12 font-medium transition-all duration-200 hover:scale-[1.02] active:scale-[0.98]"
+              >
+                🛒 Buy on Amazon India
+              </Button>
+            </div>
+          </Card>
+        )}
 
         {/* Detailed Analysis */}
         <Tabs defaultValue="alerts" className="w-full">
-          <TabsList className="grid w-full grid-cols-4 rounded-2xl">
+          <TabsList className={cn(
+            "grid w-full rounded-2xl",
+            isOCRResult ? "grid-cols-3" : "grid-cols-4"
+          )}>
             <TabsTrigger value="alerts" className="rounded-xl">
               Alerts
               {alerts.length > 0 && (
@@ -318,9 +823,28 @@ export function Results({ onNavigate, data }: ResultsProps) {
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="ingredients" className="rounded-xl">Ingredients</TabsTrigger>
-            <TabsTrigger value="claims" className="rounded-xl">Claims</TabsTrigger>
-            <TabsTrigger value="alternatives" className="rounded-xl">Better</TabsTrigger>
+            {isOCRResult ? (
+              <>
+                <TabsTrigger value="ingredients" className="rounded-xl">
+                  Ingredients
+                  {ocrResult?.ingredients && ocrResult.ingredients.length > 0 && (
+                    <Badge variant="default" className="ml-1 h-5 w-5 rounded-full p-0 text-xs">
+                      {ocrResult.ingredients.length}
+                    </Badge>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="categorized" className="rounded-xl">
+                  <Eye className="h-3 w-3 mr-1" />
+                  Details
+                </TabsTrigger>
+              </>
+            ) : (
+              <>
+                <TabsTrigger value="ingredients" className="rounded-xl">Ingredients</TabsTrigger>
+                <TabsTrigger value="claims" className="rounded-xl">Claims</TabsTrigger>
+                <TabsTrigger value="alternatives" className="rounded-xl">Better</TabsTrigger>
+              </>
+            )}
           </TabsList>
 
           <TabsContent value="alerts" className="space-y-3 mt-4">
@@ -345,28 +869,170 @@ export function Results({ onNavigate, data }: ResultsProps) {
             )}
           </TabsContent>
 
+          {isOCRResult && ocrResult?.categorizedText && (
+            <TabsContent value="categorized" className="space-y-3 mt-4">
+              {/* Brand Name */}
+              {ocrResult.categorizedText.brand_name && (
+                <Card className="card-material">
+                  <div className="p-5 space-y-2">
+                    <h3 className="text-title-medium text-foreground font-semibold">Brand Name</h3>
+                    <p className="text-lg font-bold text-primary">{ocrResult.categorizedText.brand_name}</p>
+                  </div>
+                </Card>
+              )}
+
+              {/* Slogans */}
+              {ocrResult.categorizedText.slogans.length > 0 && (
+                <Card className="card-material">
+                  <div className="p-5 space-y-3">
+                    <h3 className="text-title-medium text-foreground font-semibold">Marketing Slogans</h3>
+                    <div className="space-y-2">
+                      {ocrResult.categorizedText.slogans.map((slogan, index) => (
+                        <div key={index} className="flex items-start gap-2 p-3 bg-accent/10 rounded-lg">
+                          <span className="text-accent text-lg">💬</span>
+                          <p className="text-sm text-muted-foreground italic">{slogan}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </Card>
+              )}
+
+              {/* Marketing Text */}
+              {ocrResult.categorizedText.marketing_text.length > 0 && (
+                <Card className="card-material">
+                  <div className="p-5 space-y-3">
+                    <h3 className="text-title-medium text-foreground font-semibold">Marketing Claims</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {ocrResult.categorizedText.marketing_text.map((text, index) => (
+                        <Badge key={index} variant="outline" className="text-xs bg-warning/10 border-warning/20">
+                          {text}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                </Card>
+              )}
+
+              {/* Nutrition Facts */}
+              {Object.keys(ocrResult.categorizedText.nutrition_facts).length > 0 && (
+                <Card className="card-material">
+                  <div className="p-5 space-y-3">
+                    <h3 className="text-title-medium text-foreground font-semibold">Extracted Nutrition Facts</h3>
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      {Object.entries(ocrResult.categorizedText.nutrition_facts).map(([key, value]) => (
+                        <div key={key} className="flex justify-between p-2 bg-muted/30 rounded-lg">
+                          <span className="text-muted-foreground capitalize">{key}</span>
+                          <span className="font-medium">{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </Card>
+              )}
+
+              {/* Miscellaneous */}
+              {ocrResult.categorizedText.miscellaneous.length > 0 && (
+                <Card className="card-material">
+                  <div className="p-5 space-y-3">
+                    <h3 className="text-title-medium text-foreground font-semibold">Other Detected Text</h3>
+                    <div className="space-y-1">
+                      {ocrResult.categorizedText.miscellaneous.map((text, index) => (
+                        <div key={index} className="text-xs text-muted-foreground p-2 bg-muted/20 rounded">
+                          {text}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </Card>
+              )}
+
+              {/* Raw Text */}
+              <Card className="card-material">
+                <div className="p-5 space-y-3">
+                  <h3 className="text-title-medium text-foreground font-semibold">Raw OCR Text</h3>
+                  <div className="bg-muted/30 rounded-lg p-4 max-h-60 overflow-y-auto">
+                    <p className="text-xs text-muted-foreground whitespace-pre-wrap font-mono">
+                      {ocrResult?.rawText || ocrResult?.text || "No text extracted"}
+                    </p>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    OCR Confidence: {Math.round(ocrResult?.confidence || 0)}%
+                  </p>
+                </div>
+              </Card>
+            </TabsContent>
+          )}
+
           <TabsContent value="ingredients" className="space-y-3 mt-4">
             <Card className="card-material">
-              <div className="p-6 space-y-3">
-                <h3 className="text-title-large text-foreground">Ingredients List</h3>
-                {ingredientsList.length > 0 ? (
-                  <div className="flex flex-wrap gap-2">
-                    {ingredientsList.map((ingredient, index) => (
-                      <Badge key={index} variant="outline" className="text-xs">
-                        {ingredient}
+              <div className="p-6 space-y-4">
+                {isOCRResult && ocrResult?.ingredients && ocrResult.ingredients.length > 0 ? (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-title-large text-foreground font-semibold">Detected Ingredients</h3>
+                      <Badge variant="secondary" className="text-xs">
+                        {ocrResult.ingredients.length} found
                       </Badge>
-                    ))}
-                  </div>
+                    </div>
+                    <div className="space-y-2">
+                      {ocrResult.ingredients.map((ingredient, index) => (
+                        <div 
+                          key={index}
+                          className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
+                          onClick={() => handleIngredientClick(ingredient)}
+                        >
+                          <span className="text-xl font-bold text-primary/50">{index + 1}</span>
+                          <span className="text-sm font-medium text-foreground">{ingredient}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {ocrResult.healthAnalysis.recommendations.length > 0 && (
+                      <div className="pt-4 border-t border-border">
+                        <h4 className="text-sm font-medium text-foreground mb-3">Health Tips</h4>
+                        <div className="space-y-2">
+                          {ocrResult.healthAnalysis.recommendations.map((rec, index) => (
+                            <div key={index} className="flex items-start gap-2">
+                              <CheckCircle className="h-4 w-4 text-healthy mt-0.5 shrink-0" />
+                              <p className="text-xs text-muted-foreground">{rec}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : ingredientsList.length > 0 ? (
+                  <>
+                    <h3 className="text-title-large text-foreground">Ingredients List</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {ingredientsList.map((ingredient, index) => (
+                        <Badge 
+                          key={`product-${index}`} 
+                          variant="outline" 
+                          className="text-xs cursor-pointer hover:bg-primary/10 transition-colors"
+                          onClick={() => handleIngredientClick(ingredient)}
+                        >
+                          {ingredient}
+                        </Badge>
+                      ))}
+                    </div>
+                  </>
                 ) : (
-                  <p className="text-sm text-muted-foreground">
-                    No ingredients information available
-                  </p>
+                  <div className="text-center py-8">
+                    <FileText className="h-12 w-12 text-muted-foreground/50 mx-auto mb-3" />
+                    <p className="text-sm text-muted-foreground">
+                      No ingredients information available
+                    </p>
+                  </div>
                 )}
                 
                 {/* Allergens */}
                 {productData?.allergens && productData.allergens.length > 0 && (
-                  <div className="mt-4">
-                    <h4 className="text-sm font-medium text-foreground mb-2">Allergens</h4>
+                  <div className="mt-4 p-3 bg-red-50 dark:bg-red-950/20 rounded-lg border border-red-200 dark:border-red-900">
+                    <div className="flex items-center gap-2 mb-2">
+                      <AlertTriangle className="h-4 w-4 text-red-600" />
+                      <h4 className="text-sm font-semibold text-red-900 dark:text-red-100">Contains Allergens</h4>
+                    </div>
                     <div className="flex flex-wrap gap-1">
                       {productData.allergens.map((allergen, index) => (
                         <Badge key={index} variant="destructive" className="text-xs">
@@ -376,20 +1042,34 @@ export function Results({ onNavigate, data }: ResultsProps) {
                     </div>
                   </div>
                 )}
+
+                {/* Traces */}
+                {productData?.traces && productData.traces.length > 0 && (
+                  <div className="mt-4">
+                    <h4 className="text-sm font-medium text-foreground mb-2">May Contain Traces Of</h4>
+                    <div className="flex flex-wrap gap-1">
+                      {productData.traces.map((trace, index) => (
+                        <Badge key={index} variant="outline" className="text-xs bg-orange-50 dark:bg-orange-950/20 border-orange-300 dark:border-orange-900">
+                          {trace}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 
                 {/* Additives */}
                 {productData?.additives && productData.additives.length > 0 && (
                   <div className="mt-4">
-                    <h4 className="text-sm font-medium text-foreground mb-2">Additives</h4>
+                    <h4 className="text-sm font-medium text-foreground mb-2">Additives ({productData.additives.length})</h4>
                     <div className="flex flex-wrap gap-1">
-                      {productData.additives.slice(0, 5).map((additive, index) => (
+                      {productData.additives.slice(0, 8).map((additive, index) => (
                         <Badge key={index} variant="outline" className="text-xs">
                           {additive}
                         </Badge>
                       ))}
-                      {productData.additives.length > 5 && (
-                        <Badge variant="outline" className="text-xs">
-                          +{productData.additives.length - 5} more
+                      {productData.additives.length > 8 && (
+                        <Badge variant="outline" className="text-xs font-semibold">
+                          +{productData.additives.length - 8} more
                         </Badge>
                       )}
                     </div>
@@ -400,59 +1080,147 @@ export function Results({ onNavigate, data }: ResultsProps) {
           </TabsContent>
 
           <TabsContent value="claims" className="space-y-3 mt-4">
-            {mockContradictions.map((contradiction, index) => (
-              <Card key={index} className="card-material">
-                <div className="p-4 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <XCircle className={cn(
-                      "h-5 w-5",
-                      contradiction.severity === "high" ? "text-danger" : "text-warning"
-                    )} />
-                    <h4 className="font-medium text-foreground">Claim Contradiction</h4>
-                  </div>
-                  <div className="space-y-2 text-sm">
-                    <div>
-                      <span className="text-muted-foreground">Claim: </span>
-                      <span className="font-medium">{contradiction.claim}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Reality: </span>
-                      <span className="text-foreground">{contradiction.reality}</span>
-                    </div>
-                  </div>
+            {claimsLoading ? (
+              <Card className="card-material">
+                <div className="p-8 text-center space-y-3">
+                  <LoadingSpinner size="md" />
+                  <p className="text-sm text-muted-foreground">Verifying claims...</p>
                 </div>
               </Card>
-            ))}
+            ) : claims.length > 0 ? (
+              <div className="space-y-3">
+                {claims.map((claim, index) => (
+                  <Card key={index} className="card-material">
+                    <div className="p-4 flex items-start gap-3">
+                      <div className={cn(
+                        "p-2 rounded-full shrink-0",
+                        claim.status === 'verified' && "bg-healthy/10",
+                        claim.status === 'misleading' && "bg-warning/10",
+                        claim.status === 'false' && "bg-danger/10"
+                      )}>
+                        {claim.status === 'verified' && <CheckCircle className="h-5 w-5 text-healthy" />}
+                        {claim.status === 'misleading' && <AlertTriangle className="h-5 w-5 text-warning" />}
+                        {claim.status === 'false' && <XCircle className="h-5 w-5 text-danger" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-semibold text-foreground">{claim.claim}</span>
+                          <Badge variant={
+                            claim.status === 'verified' ? 'default' : 
+                            claim.status === 'misleading' ? 'secondary' : 'destructive'
+                          } className="text-xs capitalize">
+                            {claim.status}
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground">{claim.reason}</p>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <Card className="card-material">
+                <div className="p-8 text-center space-y-3">
+                  <div className="mx-auto w-16 h-16 bg-gradient-to-br from-primary/10 to-primary/5 rounded-2xl flex items-center justify-center">
+                    <AlertTriangle className="h-8 w-8 text-muted-foreground" />
+                  </div>
+                  <h4 className="font-semibold text-foreground">No Claims Data</h4>
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    Claim verification will be available after scanning products.
+                  </p>
+                </div>
+              </Card>
+            )}
           </TabsContent>
 
           <TabsContent value="alternatives" className="space-y-3 mt-4">
-            {mockAlternatives.map((alternative, index) => (
-              <Card key={index} className="card-material">
-                <div className="p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="font-medium text-foreground">{alternative.name}</h4>
-                      <p className="text-sm text-muted-foreground">{alternative.store}</p>
-                    </div>
-                    <div className="text-right">
-                      <div className="flex items-center gap-2">
-                        <Badge className="bg-gradient-healthy text-healthy-foreground">
-                          {alternative.grade}
-                        </Badge>
-                        <span className="text-sm font-medium">{alternative.score}</span>
-                      </div>
-                      <p className="text-sm text-muted-foreground">{alternative.price}</p>
-                    </div>
-                  </div>
-                  <Button variant="outline" size="sm" className="w-full">
-                    <ExternalLink className="h-4 w-4 mr-2" />
-                    Order Online
-                  </Button>
+            {alternativesLoading ? (
+              <Card className="card-material">
+                <div className="p-8 text-center space-y-3">
+                  <LoadingSpinner />
+                  <p className="text-sm text-muted-foreground">Finding healthier alternatives...</p>
                 </div>
               </Card>
-            ))}
+            ) : alternatives.length > 0 ? (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground px-1">
+                  Based on your profile and this product's nutrition, here are healthier options:
+                </p>
+                {alternatives.map((alt, index) => (
+                  <Card key={index} className="card-material overflow-hidden">
+                    <div className="p-4 space-y-3">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <h4 className="font-semibold text-foreground">{alt.name}</h4>
+                          <p className="text-xs text-muted-foreground">{alt.brand}</p>
+                        </div>
+                        <Badge variant="secondary" className="bg-healthy/10 text-healthy border-healthy/20">
+                          Healthier
+                        </Badge>
+                      </div>
+                      <p className="text-sm text-muted-foreground">{alt.reason}</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {alt.benefits.map((benefit, i) => (
+                          <Badge key={i} variant="outline" className="text-xs bg-primary/5">
+                            <CheckCircle className="h-3 w-3 mr-1 text-healthy" />
+                            {benefit}
+                          </Badge>
+                        ))}
+                      </div>
+                      <div className="pt-2 border-t border-border">
+                        <p className="text-xs text-muted-foreground">
+                          <span className="font-medium text-foreground">Why it's better: </span>
+                          {alt.healthierBecause}
+                        </p>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <Card className="card-material">
+                <div className="p-8 text-center space-y-3">
+                  <div className="mx-auto w-16 h-16 bg-gradient-to-br from-primary/10 to-primary/5 rounded-2xl flex items-center justify-center">
+                    <Sparkles className="h-8 w-8 text-muted-foreground" />
+                  </div>
+                  <h4 className="font-semibold text-foreground">No Alternatives Yet</h4>
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    Healthier alternatives will be suggested based on your scans.
+                  </p>
+                </div>
+              </Card>
+            )}
           </TabsContent>
         </Tabs>
+
+        {/* Ingredient Analysis Modal */}
+        <IngredientModal
+          isOpen={ingredientModalOpen}
+          onClose={handleCloseIngredientModal}
+          analysis={ingredientAnalysis}
+          isLoading={isAnalyzingIngredient}
+        />
+      </div>
+
+      {/* AI Chat Floating Button */}
+      <div className="fixed bottom-24 right-4 z-40">
+        <Sheet>
+          <SheetTrigger asChild>
+            <Button className="h-14 w-14 rounded-full bg-gradient-to-r from-blue-500 to-purple-600 shadow-lg hover:shadow-xl hover:scale-105 transition-all p-0">
+              <MessageCircle className="h-7 w-7 text-white" />
+            </Button>
+          </SheetTrigger>
+          <SheetContent side="bottom" className="h-[80vh] rounded-t-[20px]">
+            <SheetHeader className="mb-4">
+              <SheetTitle>AI Health Advisor</SheetTitle>
+            </SheetHeader>
+            <HealthChatbot 
+              userProfile={fullUserProfile} 
+              productData={productData || ocrResult} 
+              className="h-full pb-10"
+            />
+          </SheetContent>
+        </Sheet>
       </div>
     </div>
   );
